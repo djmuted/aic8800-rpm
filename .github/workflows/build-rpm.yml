@@ -30,26 +30,35 @@ jobs:
         git clone https://github.com/radxa-pkg/radxa-firmware.git fw-src
         
         # 3. APPLY PATCHES (Crucial Step)
-        # We apply the Debian patches from the repo to the source code
         cd driver-src
         if [ -d "debian/patches" ]; then
           echo "Applying Debian patches..."
           for patch in debian/patches/*.patch; do
-            # Skip empty or non-patch files
             [ -e "$patch" ] || continue
             echo "Applying $patch"
             patch -p1 < "$patch" || echo "Warning: $patch failed to apply, checking if critical..."
           done
         fi
         
-        # Clean up git artifacts to reduce size
+        # Clean up git artifacts
         rm -rf .git debian
         cd ..
         
-        # 4. Prepare Firmware Directory
+        # 4. ROBUST FIRMWARE SEARCH
         mkdir -p firmware
-        # Copy aic8800 firmware files (adjust path if radxa moves them)
-        cp -r fw-src/firmware/aic8800_fw/* firmware/ || echo "Warning: Firmware path might have changed"
+        
+        # Find the directory named 'aic8800' or 'aic8800_fw' inside the firmware repo
+        # We look for a directory that contains .bin files to be sure
+        FW_DIR=$(find fw-src -type d \( -name "aic8800" -o -name "aic8800_fw" \) | head -n 1)
+        
+        if [ -z "$FW_DIR" ]; then
+            echo "ERROR: Could not find aic8800 firmware directory in fw-src"
+            find fw-src -maxdepth 4  # Print tree to debug
+            exit 1
+        fi
+        
+        echo "Found firmware at: $FW_DIR"
+        cp -r "$FW_DIR"/* firmware/
         
         # 5. Create Tarballs for RPM
         tar -czf ~/rpmbuild/SOURCES/aic8800-source.tar.gz -C driver-src .
