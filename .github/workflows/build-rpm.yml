@@ -1,0 +1,71 @@
+name: Build AIC8800 RPM for Bazzite
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-rpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest  # Build inside Fedora to get native rpmbuild tools
+
+    steps:
+    - name: Install Build Tools
+      run: |
+        dnf install -y git make gcc rpm-build rpmdevtools wget tar patch diffutils dnf-plugins-core
+        mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+
+    - name: Checkout Your Repo (with spec file)
+      uses: actions/checkout@v4
+      with:
+        path: repo
+
+    - name: Prepare Sources (Driver & Firmware)
+      run: |
+        # 1. Clone Radxa Driver Repo
+        git clone https://github.com/radxa-pkg/aic8800.git driver-src
+        
+        # 2. Clone Radxa Firmware Repo
+        git clone https://github.com/radxa-pkg/radxa-firmware.git fw-src
+        
+        # 3. APPLY PATCHES (Crucial Step)
+        # We apply the Debian patches from the repo to the source code
+        cd driver-src
+        if [ -d "debian/patches" ]; then
+          echo "Applying Debian patches..."
+          for patch in debian/patches/*.patch; do
+            # Skip empty or non-patch files
+            [ -e "$patch" ] || continue
+            echo "Applying $patch"
+            patch -p1 < "$patch" || echo "Warning: $patch failed to apply, checking if critical..."
+          done
+        fi
+        
+        # Clean up git artifacts to reduce size
+        rm -rf .git debian
+        cd ..
+        
+        # 4. Prepare Firmware Directory
+        mkdir -p firmware
+        # Copy aic8800 firmware files (adjust path if radxa moves them)
+        cp -r fw-src/firmware/aic8800_fw/* firmware/ || echo "Warning: Firmware path might have changed"
+        
+        # 5. Create Tarballs for RPM
+        tar -czf ~/rpmbuild/SOURCES/aic8800-source.tar.gz -C driver-src .
+        tar -czf ~/rpmbuild/SOURCES/aic8800-firmware.tar.gz -C . firmware
+
+    - name: Build RPM
+      run: |
+        # Copy spec file from your repo to build dir
+        cp repo/aic8800.spec ~/rpmbuild/SPECS/
+        
+        # Build it
+        rpmbuild -bb ~/rpmbuild/SPECS/aic8800.spec
+
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: aic8800-rpms
+        path: |
+          /github/home/rpmbuild/RPMS/noarch/*.rpm
