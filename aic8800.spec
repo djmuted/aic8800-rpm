@@ -29,27 +29,21 @@ Firmware files for AIC8800 series chipsets.
 %install
 # --- Install Firmware ---
 mkdir -p %{buildroot}/lib/firmware/aic8800
+# Copy the contents of the 'firmware' directory we prepared
 cp -r firmware/* %{buildroot}/lib/firmware/aic8800/
 
 # --- Install Driver Source for DKMS ---
-# Find the USB driver directory. Radxa structure varies, so we find the Makefile for USB.
-# Usually: src/USB/driver_fw/driver/aic8800
-DRIVER_DIR=$(find . -type d -path "*/USB/driver_fw/driver/aic8800" | head -n 1)
-
 mkdir -p %{buildroot}/usr/src/%{name}-%{version}
-cp -r $DRIVER_DIR/* %{buildroot}/usr/src/%{name}-%{version}/
 
-# Copy necessary includes if they are outside the driver dir (common issue with AIC source)
-# We copy the whole 'src' to be safe, but structure it so DKMS finds the USB makefile
-cp -r src %{buildroot}/usr/src/%{name}-%{version}/src_root
+# Copy everything from current dir (.) to the buildroot
+# excluding the 'firmware' dir we just processed and the hidden .git stuff
+find . -maxdepth 1 -not -name 'firmware' -not -name '.' -not -name '..' -exec cp -r {} %{buildroot}/usr/src/%{name}-%{version}/ \;
 
 # Create dkms.conf
 cat > %{buildroot}/usr/src/%{name}-%{version}/dkms.conf <<EOF
 PACKAGE_NAME="%{name}"
 PACKAGE_VERSION="%{version}"
 BUILT_MODULE_NAME[0]="aic8800_fdrv"
-# Point to the USB driver directory relative to where we copied source
-MAKE[0]="make -C \${kernel_source_dir} M=\${dkms_source_tree} modules"
 DEST_MODULE_LOCATION[0]="/kernel/drivers/net/wireless"
 AUTOINSTALL="yes"
 EOF
