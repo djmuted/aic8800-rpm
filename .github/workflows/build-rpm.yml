@@ -8,68 +8,79 @@ on:
 jobs:
   build-rpm:
     runs-on: ubuntu-latest
-    container: fedora:latest  # Build inside Fedora to get native rpmbuild tools
+    container: fedora:latest
 
     steps:
     - name: Install Build Tools
       run: |
-        dnf install -y git make gcc rpm-build rpmdevtools wget tar patch diffutils dnf-plugins-core
+        dnf install -y git make gcc rpm-build rpmdevtools wget tar patch diffutils dnf-plugins-core binutils jq
         mkdir -p ~/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
 
-    - name: Checkout Your Repo (with spec file)
+    - name: Checkout Your Repo
       uses: actions/checkout@v4
       with:
         path: repo
 
-    - name: Prepare Sources (Driver & Firmware)
+    - name: Prepare Sources
       run: |
-        # 1. Clone Radxa Driver Repo
+        # --- 1. PREPARE FIRMWARE (From Radxa .deb Release) ---
+        echo "Fetching latest firmware .deb url..."
+        
+        # Get the download URL for the latest 'aic8800-firmware' .deb
+        FW_URL=$(curl -s https://api.github.com/repos/radxa-pkg/aic8800/releases/latest \
+          | jq -r '.assets[] | select(.name | startswith("aic8800-firmware") and endswith(".deb")) | .browser_download_url' \
+          | head -n 1)
+        
+        echo "Downloading: $FW_URL"
+        wget -q -O firmware.deb "$FW_URL"
+        
+        # Extract the .deb (ar archive -> data.tar.xz -> files)
+        ar x firmware.deb
+        mkdir -p extracted_fw
+        tar -xf data.tar.xz -C extracted_fw
+        
+        # Locate the actual firmware files inside the extracted structure
+        # Usually found at ./lib/firmware/aic8800 or ./usr/lib/firmware/aic8800
+        FW_SOURCE=$(find extracted_fw -type d -name "aic8800" | head -n 1)
+        
+        if [ -z "$FW_SOURCE" ]; then
+           echo "ERROR: Could not find 'aic8800' folder inside the .deb!"
+           find extracted_fw
+           exit 1
+        fi
+        
+        echo "Found firmware at: $FW_SOURCE"
+        
+        # Move to 'firmware' folder for our RPM packaging
+        mkdir firmware
+        cp -r "$FW_SOURCE"/* firmware/
+        
+        # Create Firmware Tarball
+        tar -czf ~/rpmbuild/SOURCES/aic8800-firmware.tar.gz -C . firmware
+        
+        
+        # --- 2. PREPARE DRIVER SOURCE (From Git) ---
+        # We still need the git repo for the source code to compile the kernel module
         git clone https://github.com/radxa-pkg/aic8800.git driver-src
         
-        # 2. Clone Radxa Firmware Repo
-        git clone https://github.com/radxa-pkg/radxa-firmware.git fw-src
-        
-        # 3. APPLY PATCHES (Crucial Step)
+        # Apply Patches if they exist
         cd driver-src
         if [ -d "debian/patches" ]; then
-          echo "Applying Debian patches..."
           for patch in debian/patches/*.patch; do
             [ -e "$patch" ] || continue
             echo "Applying $patch"
-            patch -p1 < "$patch" || echo "Warning: $patch failed to apply, checking if critical..."
+            patch -p1 < "$patch" || echo "Warning: Patch failed"
           done
         fi
-        
-        # Clean up git artifacts
         rm -rf .git debian
         cd ..
         
-        # 4. ROBUST FIRMWARE SEARCH
-        mkdir -p firmware
-        
-        # Find the directory named 'aic8800' or 'aic8800_fw' inside the firmware repo
-        # We look for a directory that contains .bin files to be sure
-        FW_DIR=$(find fw-src -type d \( -name "aic8800" -o -name "aic8800_fw" \) | head -n 1)
-        
-        if [ -z "$FW_DIR" ]; then
-            echo "ERROR: Could not find aic8800 firmware directory in fw-src"
-            find fw-src -maxdepth 4  # Print tree to debug
-            exit 1
-        fi
-        
-        echo "Found firmware at: $FW_DIR"
-        cp -r "$FW_DIR"/* firmware/
-        
-        # 5. Create Tarballs for RPM
+        # Create Source Tarball
         tar -czf ~/rpmbuild/SOURCES/aic8800-source.tar.gz -C driver-src .
-        tar -czf ~/rpmbuild/SOURCES/aic8800-firmware.tar.gz -C . firmware
 
     - name: Build RPM
       run: |
-        # Copy spec file from your repo to build dir
         cp repo/aic8800.spec ~/rpmbuild/SPECS/
-        
-        # Build it
         rpmbuild -bb ~/rpmbuild/SPECS/aic8800.spec
 
     - name: Upload Artifacts
